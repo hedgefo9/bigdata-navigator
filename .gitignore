@@ -1,0 +1,23 @@
+# PyCharm/JetBrains
+.idea/
+*.iws
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.venv/
+env/
+bin/
+include/
+lib/
+
+# Local configuration
+.env
+.local/
+
+# MacOS
+.DS_Store

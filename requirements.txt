@@ -1,0 +1,4 @@
+langchain
+langchain-community
+psycopg2-binary
+clickhouse-connect

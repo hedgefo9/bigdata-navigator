@@ -1,0 +1,4 @@
+[
+  "postgresql://data_user:data_password@localhost:5433/data_catalog",
+  "clickhouse://data_user:data_password@localhost:8123/data_catalog"
+]

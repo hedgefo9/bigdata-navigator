@@ -1,0 +1,100 @@
+name: bigdata-navigator-data
+
+services:
+  data-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: data_catalog
+      POSTGRES_USER: data_user
+      POSTGRES_PASSWORD: data_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - data_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U data_user -d data_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data_net
+
+  data-mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: data_admin
+      MONGO_INITDB_ROOT_PASSWORD: data_admin_password
+    ports:
+      - "27018:27017"
+    volumes:
+      - data_mongodb_data:/data/db
+    networks:
+      - data_net
+
+  data-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "data_redis_password"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - data_redis_data:/data
+    networks:
+      - data_net
+
+  data-cassandra:
+    image: cassandra:4.1
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: BigDataNavigatorDataCluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack1
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    ports:
+      - "9043:9042"
+    volumes:
+      - data_cassandra_data:/var/lib/cassandra
+    networks:
+      - data_net
+
+  data-clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: data_catalog
+      CLICKHOUSE_USER: data_user
+      CLICKHOUSE_PASSWORD: data_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - data_clickhouse_data:/var/lib/clickhouse
+    networks:
+      - data_net
+
+  data-bigquery:
+    image: ghcr.io/goccy/bigquery-emulator:latest
+    restart: unless-stopped
+    command: ["--project=test-project", "--dataset=data_catalog", "--port=9050"]
+    ports:
+      - "9050:9050"
+    volumes:
+      - data_bigquery_data:/data
+    networks:
+      - data_net
+
+volumes:
+  data_postgres_data:
+  data_mongodb_data:
+  data_redis_data:
+  data_cassandra_data:
+  data_clickhouse_data:
+  data_bigquery_data:
+
+networks:
+  data_net:
+    driver: bridge
