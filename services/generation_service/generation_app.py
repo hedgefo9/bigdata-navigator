@@ -74,7 +74,7 @@ class ChatPageResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=10000)
-    mode: Literal["new_search", "continue"] = "new_search"
+    mode: Literal["new_search", "continue", "auto"] = "auto"
     source: str | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
     score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -180,16 +180,96 @@ def _touch_chat(chat: Chat):
     chat.updated_at = datetime.now(timezone.utc)
 
 
+def _normalize_entity_label(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    parts = [part.strip() for part in text.split(".") if part.strip()]
+    if not parts:
+        return ""
+
+    source_prefixes = {
+        "postgres",
+        "postgresql",
+        "clickhouse",
+        "mysql",
+        "mariadb",
+        "oracle",
+        "mssql",
+        "mongodb",
+        "redis",
+        "kafka",
+        "s3",
+        "minio",
+        "bigquery",
+        "snowflake",
+    }
+
+    if len(parts) >= 4 and parts[0].lower() in source_prefixes:
+        parts = parts[1:]
+    elif len(parts) > 3:
+        parts = parts[-3:]
+
+    return ".".join(parts)
+
+
 def _entity_label_from_payload(payload: dict[str, Any]) -> str | None:
-    source = payload.get("source")
     database_name = payload.get("database_name")
     table_name = payload.get("table_name")
-    if not source or not database_name or not table_name:
+    if not database_name or not table_name:
         return None
     column_name = payload.get("column_name")
     if column_name:
-        return f"{source}.{database_name}.{table_name}.{column_name}"
-    return f"{source}.{database_name}.{table_name}"
+        return f"{database_name}.{table_name}.{column_name}"
+    return f"{database_name}.{table_name}"
+
+
+def _build_entity_details(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": payload.get("source"),
+        "source_name": payload.get("source_name"),
+        "source_kind": payload.get("source_kind"),
+        "source_dialect": payload.get("source_dialect"),
+        "connection_uri": payload.get("connection_uri"),
+        "vault_url": payload.get("vault_url"),
+        "vault_secret_ref": payload.get("vault_secret_ref"),
+        "entity_type": payload.get("entity_type"),
+    }
+
+
+def _merge_entity_details(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    for key, value in patch.items():
+        if key not in merged or merged.get(key) is None or merged.get(key) == "":
+            merged[key] = value
+    return merged
+
+
+def _extract_entity_details(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    entity_details: dict[str, dict[str, Any]] = {}
+
+    matches = result.get("matches")
+    if isinstance(matches, list):
+        for match in matches:
+            payload = dict((match or {}).get("payload") or {})
+            label = _entity_label_from_payload(payload)
+            if not label:
+                continue
+            details = _build_entity_details(payload)
+            if label in entity_details:
+                entity_details[label] = _merge_entity_details(entity_details[label], details)
+            else:
+                entity_details[label] = details
+
+    used_entities = result.get("used_entities")
+    if isinstance(used_entities, list):
+        for item in used_entities:
+            label = _normalize_entity_label(str(item))
+            if label and label not in entity_details:
+                entity_details[label] = {}
+
+    return entity_details
 
 
 def _extract_sources(result: dict[str, Any]) -> list[str]:
@@ -197,30 +277,41 @@ def _extract_sources(result: dict[str, Any]) -> list[str]:
     used_entities = result.get("used_entities")
     if isinstance(used_entities, list):
         for item in used_entities:
-            text = str(item).strip()
+            text = _normalize_entity_label(str(item))
             if text and text not in sources:
                 sources.append(text)
 
-    matches = result.get("matches")
-    if isinstance(matches, list):
-        for match in matches:
-            payload = dict((match or {}).get("payload") or {})
-            label = _entity_label_from_payload(payload)
-            if label and label not in sources:
-                sources.append(label)
+    for label in _extract_entity_details(result).keys():
+        if label not in sources:
+            sources.append(label)
 
     return sources[:12]
 
 
-def _build_assistant_metadata(result: dict[str, Any], mode: str, top_k: int | None) -> dict[str, Any]:
+def _build_assistant_metadata(
+    result: dict[str, Any],
+    requested_mode: str,
+    top_k: int | None,
+) -> dict[str, Any]:
+    resolved_mode = str(result.get("resolved_mode") or requested_mode)
+    used_entities = []
+    raw_used_entities = result.get("used_entities")
+    if isinstance(raw_used_entities, list):
+        for item in raw_used_entities:
+            label = _normalize_entity_label(str(item))
+            if label and label not in used_entities:
+                used_entities.append(label)
+
     return {
-        "sql_query": result.get("sql_query"),
-        "used_entities": result.get("used_entities", []),
+        "query": result.get("query") or result.get("sql_query"),
+        "used_entities": used_entities,
         "sources": _extract_sources(result),
+        "entity_details": _extract_entity_details(result),
         "limitations": result.get("limitations"),
         "matches": result.get("matches", []),
         "search_performed": result.get("search_performed", False),
-        "mode": mode,
+        "mode_requested": requested_mode,
+        "mode": resolved_mode,
         "top_k": top_k,
     }
 
@@ -381,7 +472,11 @@ def send_message(
     api_config = config.get("generation_api", {})
     history_window = int(api_config.get("history_window", 12))
     history = _get_history_messages(db=db, chat_id=chat.id, window=history_window)
-    previous_matches = _get_last_matches(db=db, chat_id=chat.id) if request.mode == "continue" else []
+    previous_matches = (
+        _get_last_matches(db=db, chat_id=chat.id)
+        if request.mode in {"continue", "auto"}
+        else []
+    )
 
     try:
         result = pipeline.ask(
@@ -401,11 +496,16 @@ def send_message(
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Generation pipeline error: {error}") from error
 
-    assistant_metadata = _build_assistant_metadata(result, mode=request.mode, top_k=request.top_k)
+    assistant_metadata = _build_assistant_metadata(
+        result=result,
+        requested_mode=request.mode,
+        top_k=request.top_k,
+    )
+    assistant_mode = str(assistant_metadata.get("mode") or request.mode)
     assistant_message = Message(
         chat_id=chat.id,
         role="assistant",
-        mode=request.mode,
+        mode=assistant_mode,
         content=result.get("answer", ""),
         extra_data=assistant_metadata,
     )
@@ -447,7 +547,11 @@ def send_message_stream(
     api_config = config.get("generation_api", {})
     history_window = int(api_config.get("history_window", 12))
     history = _get_history_messages(db=db, chat_id=chat.id, window=history_window)
-    previous_matches = _get_last_matches(db=db, chat_id=chat.id) if request.mode == "continue" else []
+    previous_matches = (
+        _get_last_matches(db=db, chat_id=chat.id)
+        if request.mode in {"continue", "auto"}
+        else []
+    )
 
     def stream_events():
         yield _sse("ack", {"message": _message_to_dict(user_message)})
@@ -474,13 +578,14 @@ def send_message_stream(
                 result = dict(event.get("result") or {})
                 assistant_metadata = _build_assistant_metadata(
                     result=result,
-                    mode=request.mode,
+                    requested_mode=request.mode,
                     top_k=request.top_k,
                 )
+                assistant_mode = str(assistant_metadata.get("mode") or request.mode)
                 assistant_message = Message(
                     chat_id=chat.id,
                     role="assistant",
-                    mode=request.mode,
+                    mode=assistant_mode,
                     content=result.get("answer", ""),
                     extra_data=assistant_metadata,
                 )
@@ -513,4 +618,4 @@ if __name__ == "__main__":
     api_config = config.get("generation_api", {})
     host = str(api_config.get("host", "0.0.0.0"))
     port = int(api_config.get("port", 8010))
-    uvicorn.run("app:app", host=host, port=port, reload=False)
+    uvicorn.run(app, host=host, port=port, reload=False)

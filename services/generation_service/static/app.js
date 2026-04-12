@@ -19,9 +19,10 @@ createApp({
       selectedChat: null,
       messages: [],
       messageText: "",
-      sendMode: "new_search",
+      sendMode: "auto",
       topK: 8,
-      sending: false
+      sending: false,
+      activeEntity: null
     };
   },
 
@@ -87,12 +88,117 @@ createApp({
       }
     },
 
+    normalizeEntityLabel(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const parts = text.split(".").map((item) => item.trim()).filter(Boolean);
+      if (parts.length === 0) return "";
+
+      const sourcePrefixes = new Set([
+        "postgres",
+        "postgresql",
+        "clickhouse",
+        "mysql",
+        "mariadb",
+        "oracle",
+        "mssql",
+        "mongodb",
+        "redis",
+        "kafka",
+        "s3",
+        "minio",
+        "bigquery",
+        "snowflake"
+      ]);
+      if (parts.length >= 4 && sourcePrefixes.has(parts[0].toLowerCase())) {
+        return parts.slice(1).join(".");
+      }
+      if (parts.length > 3) {
+        return parts.slice(-3).join(".");
+      }
+      return parts.join(".");
+    },
+
+    uniqueEntityList(values) {
+      const unique = [];
+      for (const item of Array.isArray(values) ? values : []) {
+        const label = this.normalizeEntityLabel(item);
+        if (label && !unique.includes(label)) unique.push(label);
+      }
+      return unique;
+    },
+
+    normalizeEntityDetailsMap(entityDetails) {
+      const result = {};
+      if (!entityDetails || typeof entityDetails !== "object" || Array.isArray(entityDetails)) {
+        return result;
+      }
+      for (const [rawKey, rawValue] of Object.entries(entityDetails)) {
+        const key = this.normalizeEntityLabel(rawKey);
+        if (!key) continue;
+        const value = (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue))
+          ? rawValue
+          : {};
+        result[key] = {
+          ...(result[key] || {}),
+          ...value
+        };
+      }
+      return result;
+    },
+
+    getMessageEntities(message) {
+      const metadata = (message && message.metadata) ? message.metadata : {};
+      const usedEntities = this.uniqueEntityList(metadata.used_entities || []);
+      if (usedEntities.length > 0) return usedEntities;
+      return this.uniqueEntityList(metadata.sources || []);
+    },
+
+    getEntityDetails(message, entity) {
+      const metadata = (message && message.metadata) ? message.metadata : {};
+      const map = this.normalizeEntityDetailsMap(metadata.entity_details);
+      const key = this.normalizeEntityLabel(entity);
+      return map[key] || {};
+    },
+
+    toggleEntityDetails(messageId, entity) {
+      const normalizedEntity = this.normalizeEntityLabel(entity);
+      if (!normalizedEntity) return;
+      if (
+        this.activeEntity &&
+        this.activeEntity.messageId === messageId &&
+        this.activeEntity.entity === normalizedEntity
+      ) {
+        this.activeEntity = null;
+        return;
+      }
+      this.activeEntity = { messageId, entity: normalizedEntity };
+    },
+
+    isEntityExpanded(messageId, entity) {
+      const normalizedEntity = this.normalizeEntityLabel(entity);
+      return Boolean(
+        this.activeEntity &&
+        this.activeEntity.messageId === messageId &&
+        this.activeEntity.entity === normalizedEntity
+      );
+    },
+
+    formatSearchState(value) {
+      if (value === true) return "yes";
+      if (value === false) return "no";
+      return "auto";
+    },
+
     normalizeAssistantContent(message) {
       const normalized = {
         ...message,
         metadata: { ...(message.metadata || {}) }
       };
       if (normalized.role !== "assistant") return normalized;
+      if (!normalized.metadata.query && typeof normalized.metadata.sql_query === "string" && normalized.metadata.sql_query.trim()) {
+        normalized.metadata.query = normalized.metadata.sql_query.trim();
+      }
 
       const parsed = this.parseJsonCandidate(normalized.content);
       if (!parsed) {
@@ -102,14 +208,17 @@ createApp({
       if (typeof parsed.answer === "string" && parsed.answer.trim()) {
         normalized.content = parsed.answer.trim();
       }
-      if (!normalized.metadata.sql_query && typeof parsed.sql_query === "string" && parsed.sql_query.trim()) {
-        normalized.metadata.sql_query = parsed.sql_query.trim();
+      if (!normalized.metadata.query && typeof parsed.query === "string" && parsed.query.trim()) {
+        normalized.metadata.query = parsed.query.trim();
+      }
+      if (!normalized.metadata.query && typeof parsed.sql_query === "string" && parsed.sql_query.trim()) {
+        normalized.metadata.query = parsed.sql_query.trim();
       }
       if (
         (!Array.isArray(normalized.metadata.used_entities) || normalized.metadata.used_entities.length === 0) &&
         Array.isArray(parsed.used_entities)
       ) {
-        normalized.metadata.used_entities = parsed.used_entities.map((value) => String(value));
+        normalized.metadata.used_entities = this.uniqueEntityList(parsed.used_entities);
       }
       if (
         (normalized.metadata.limitations === null || normalized.metadata.limitations === undefined || normalized.metadata.limitations === "") &&
@@ -122,8 +231,11 @@ createApp({
         (!Array.isArray(normalized.metadata.sources) || normalized.metadata.sources.length === 0) &&
         Array.isArray(normalized.metadata.used_entities)
       ) {
-        normalized.metadata.sources = [...new Set(normalized.metadata.used_entities.map((item) => String(item).trim()).filter(Boolean))];
+        normalized.metadata.sources = this.uniqueEntityList(normalized.metadata.used_entities);
       }
+      normalized.metadata.used_entities = this.uniqueEntityList(normalized.metadata.used_entities || []);
+      normalized.metadata.sources = this.uniqueEntityList(normalized.metadata.sources || []);
+      normalized.metadata.entity_details = this.normalizeEntityDetailsMap(normalized.metadata.entity_details);
 
       return normalized;
     },
@@ -180,6 +292,7 @@ createApp({
       this.chats = [];
       this.selectedChat = null;
       this.messages = [];
+      this.activeEntity = null;
       localStorage.removeItem("bdn_token");
     },
 
@@ -292,6 +405,7 @@ createApp({
 
     async selectChat(chatId) {
       this.error = "";
+      this.activeEntity = null;
       this.selectedChat = this.chats.find((chat) => chat.id === chatId) || null;
       if (!this.selectedChat) return;
 
@@ -447,6 +561,7 @@ createApp({
       const localAssistantId = `local-assistant-${Date.now() + 1}`;
 
       this.messageText = "";
+      this.activeEntity = null;
       this.appendLocalMessage({
         id: localUserId,
         role: "user",
@@ -463,7 +578,7 @@ createApp({
         content: "",
         metadata: {
           mode: this.sendMode,
-          search_performed: this.sendMode === "new_search",
+          search_performed: this.sendMode === "new_search" ? true : (this.sendMode === "continue" ? false : null),
           top_k: this.topK,
           sources: []
         },

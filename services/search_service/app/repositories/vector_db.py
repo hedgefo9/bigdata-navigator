@@ -149,16 +149,32 @@ def search_metadata(
             with_vectors=False,
         )
     elif hasattr(client, "query_points"):
-        response = client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            limit=top_k,
-            score_threshold=score_threshold,
-            query_filter=query_filter,
-            with_payload=True,
-            with_vectors=False,
-        )
-        points = list(getattr(response, "points", []) or [])
+        try:
+            response = client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=top_k,
+                score_threshold=score_threshold,
+                query_filter=query_filter,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except TypeError:
+            # Some client versions use `filter` instead of `query_filter`.
+            response = client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=top_k,
+                score_threshold=score_threshold,
+                filter=query_filter,
+                with_payload=True,
+                with_vectors=False,
+            )
+
+        if isinstance(response, list):
+            points = response
+        else:
+            points = list(getattr(response, "points", []) or [])
     else:
         raise RuntimeError("Unsupported qdrant-client version: neither search() nor query_points() available")
 
@@ -216,13 +232,22 @@ def get_metadata_by_entity_id(
             match=qmodels.MatchValue(value=entity_id),
         )
     ]
-    points, _ = client.scroll(
-        collection_name=collection_name,
-        scroll_filter=qmodels.Filter(must=must_filters),
-        limit=1,
-        with_payload=True,
-        with_vectors=False,
-    )
+    try:
+        points, _ = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=qmodels.Filter(must=must_filters),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except TypeError:
+        points, _ = client.scroll(
+            collection_name=collection_name,
+            filter=qmodels.Filter(must=must_filters),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
     if points:
         point = points[0]
         return {

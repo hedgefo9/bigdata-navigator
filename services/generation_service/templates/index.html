@@ -88,22 +88,54 @@
               <span>{{ message.role === 'assistant' ? 'Ассистент' : 'Вы' }}</span>
               <span>{{ formatDate(message.created_at) }}</span>
             </div>
-            <div class="message-content">{{ message.content }}</div>
-            <div class="typing" v-if="message.streaming && !message.content">Печатает...</div>
+            <div class="message-content" :class="{streaming: message.streaming}">{{ message.content }}</div>
+            <div class="typing" v-if="message.streaming && !message.content">Готовлю ответ...</div>
 
             <div class="metadata" v-if="message.role === 'assistant' && message.metadata">
               <div class="tagline">
                 <span class="tag">mode: {{ message.metadata.mode || message.mode }}</span>
-                <span class="tag">search: {{ message.metadata.search_performed ? 'yes' : 'no' }}</span>
+                <span class="tag">search: {{ formatSearchState(message.metadata.search_performed) }}</span>
                 <span class="tag" v-if="message.metadata.top_k">top-k: {{ message.metadata.top_k }}</span>
               </div>
-              <div class="sources" v-if="message.metadata.sources && message.metadata.sources.length">
+              <div class="sources" v-if="getMessageEntities(message).length">
                 <span class="sources-label">Источники:</span>
-                <span class="source-chip" v-for="source in message.metadata.sources.slice(0, 8)" :key="source">
+                <button
+                  class="source-chip source-chip-btn"
+                  :class="{active: isEntityExpanded(message.id, source)}"
+                  v-for="source in getMessageEntities(message).slice(0, 12)"
+                  :key="source"
+                  @click="toggleEntityDetails(message.id, source)"
+                >
                   {{ source }}
-                </span>
+                </button>
               </div>
-              <pre v-if="message.metadata.sql_query">{{ message.metadata.sql_query }}</pre>
+              <div class="entity-details" v-if="activeEntity && activeEntity.messageId === message.id">
+                <div class="entity-title">{{ activeEntity.entity }}</div>
+                <div class="entity-row" v-if="getEntityDetails(message, activeEntity.entity).source_kind">
+                  type: {{ getEntityDetails(message, activeEntity.entity).source_kind }}
+                  <span v-if="getEntityDetails(message, activeEntity.entity).source_dialect">
+                    / {{ getEntityDetails(message, activeEntity.entity).source_dialect }}
+                  </span>
+                </div>
+                <div class="entity-row" v-if="getEntityDetails(message, activeEntity.entity).connection_uri">
+                  <span>connection:</span>
+                  <code>{{ getEntityDetails(message, activeEntity.entity).connection_uri }}</code>
+                </div>
+                <div class="entity-row" v-if="getEntityDetails(message, activeEntity.entity).vault_url">
+                  <span>vault:</span>
+                  <a
+                    :href="getEntityDetails(message, activeEntity.entity).vault_url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {{ getEntityDetails(message, activeEntity.entity).vault_url }}
+                  </a>
+                </div>
+                <div class="entity-row" v-if="Object.keys(getEntityDetails(message, activeEntity.entity)).length === 0">
+                  Информация о подключении недоступна в текущем контексте.
+                </div>
+              </div>
+              <pre v-if="message.metadata.query">{{ message.metadata.query }}</pre>
               <div class="hint" v-if="message.metadata.limitations">{{ message.metadata.limitations }}</div>
             </div>
           </article>
@@ -123,6 +155,12 @@
             @click="sendMode='continue'"
           >
             Продолжить диалог
+          </button>
+          <button
+            :class="{active: sendMode==='auto'}"
+            @click="sendMode='auto'"
+          >
+            Авто
           </button>
           <label class="topk-control">
             <span>Top-K</span>

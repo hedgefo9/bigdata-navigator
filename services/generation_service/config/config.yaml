@@ -2,11 +2,11 @@ database:
   host: "localhost"
   port: 5434
   username: "generation_user"
-  password: "generation_password"
+  password: "vault://secret/bigdata-navigator/generation#database_password"
   database: "generation"
 
 auth:
-  jwt_secret: "change-me-in-prod"
+  jwt_secret: "vault://secret/bigdata-navigator/generation#jwt_secret"
   jwt_algorithm: "HS256"
   token_ttl_minutes: 1440
 
@@ -27,3 +27,8 @@ generation_api:
   host: "0.0.0.0"
   port: 8010
   history_window: 12
+
+vault:
+  url: "http://localhost:8200"
+  token: "root"
+  timeout_seconds: 5

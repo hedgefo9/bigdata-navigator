@@ -1,4 +1,20 @@
 [
-  "postgresql://data_user:data_password@localhost:5433/data_catalog",
-  "clickhouse://data_user:data_password@localhost:8123/data_catalog"
+  {
+    "name": "catalog-postgres",
+    "source": "postgres",
+    "kind": "sql",
+    "dialect": "postgresql",
+    "connection_uri": "postgresql://data_user@localhost:5433/data_catalog",
+    "vault_url": "http://localhost:8200/ui/vault/secrets/secret/show/bigdata-navigator%2Fsources%2Fcatalog-postgres",
+    "vault_secret_ref": "vault://secret/bigdata-navigator/sources/catalog-postgres#password"
+  },
+  {
+    "name": "catalog-clickhouse",
+    "source": "clickhouse",
+    "kind": "sql",
+    "dialect": "clickhouse",
+    "connection_uri": "clickhouse://data_user@localhost:8123/data_catalog",
+    "vault_url": "http://localhost:8200/ui/vault/secrets/secret/show/bigdata-navigator%2Fsources%2Fcatalog-clickhouse",
+    "vault_secret_ref": "vault://secret/bigdata-navigator/sources/catalog-clickhouse#password"
+  }
 ]

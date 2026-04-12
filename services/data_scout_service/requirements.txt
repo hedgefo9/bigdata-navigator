@@ -4,3 +4,4 @@ clickhouse-connect
 pyyaml
 schedule
 kafka-python
+httpx

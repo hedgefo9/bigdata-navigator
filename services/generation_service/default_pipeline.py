@@ -8,20 +8,24 @@ import httpx
 
 SYSTEM_PROMPT = """
 Ты — интеллектуальный помощник BigData Navigator.
-Твоя задача: по вопросу пользователя находить релевантные метаданные таблиц/колонок и помогать строить SQL.
+Твоя задача: по вопросу пользователя находить релевантные метаданные сущностей данных
+(SQL, NoSQL, файловые и другие источники), объяснять данные и при возможности строить запросы.
 
 Правила ответа:
 1) Используй только предоставленный контекст и историю диалога.
 2) Не придумывай таблицы, поля и связи, которых нет в контексте.
-3) Если данных достаточно — предложи SQL (PostgreSQL-диалект по умолчанию).
-4) Если данных недостаточно — явно опиши, каких метаданных не хватает.
-5) Отвечай на русском языке, кратко и по делу.
+3) Если источник в контексте SQL и данных достаточно — предложи SQL.
+4) Если источник не SQL — тоже сформируй query в нативном формате источника (например MongoDB filter/pipeline, Elasticsearch DSL, Cypher, Gremlin, KQL и т.д.) при достаточном контексте.
+5) Если данных недостаточно — явно опиши, каких метаданных не хватает.
+6) Отвечай на русском языке, кратко и по делу.
+7) Для non-SQL источников в used_entities используй тот же формат database.table[.column], где table = контейнер/коллекция/индекс/топик.
+8) Если пользователь спрашивает про подключение, опирайся только на connection_uri и vault_url из контекста.
 
 Верни JSON без markdown:
 {
   "answer": "человеко-понятный ответ",
-  "sql_query": "SQL или null",
-  "used_entities": ["source.database.table[.column]", "..."],
+  "query": "запрос на языке источника или null",
+  "used_entities": ["database.table[.column]", "..."],
   "limitations": "ограничения/нехватка контекста или null"
 }
 """
@@ -309,13 +313,47 @@ class GenerationPipeline:
 
     @staticmethod
     def _entity_label(payload: dict[str, Any]) -> str:
-        source = payload.get("source") or "unknown_source"
         database_name = payload.get("database_name") or "unknown_db"
         table_name = payload.get("table_name") or "unknown_table"
         column_name = payload.get("column_name")
         if column_name:
-            return f"{source}.{database_name}.{table_name}.{column_name}"
-        return f"{source}.{database_name}.{table_name}"
+            return f"{database_name}.{table_name}.{column_name}"
+        return f"{database_name}.{table_name}"
+
+    @staticmethod
+    def _normalize_entity_label(value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            return ""
+
+        parts = [part.strip() for part in text.split(".") if part.strip()]
+        if not parts:
+            return ""
+
+        source_prefixes = {
+            "postgres",
+            "postgresql",
+            "clickhouse",
+            "mysql",
+            "mariadb",
+            "oracle",
+            "mssql",
+            "mongodb",
+            "cassandra",
+            "redis",
+            "kafka",
+            "s3",
+            "minio",
+            "bigquery",
+            "snowflake",
+        }
+
+        if len(parts) >= 4 and parts[0].lower() in source_prefixes:
+            parts = parts[1:]
+        elif len(parts) > 3:
+            parts = parts[-3:]
+
+        return ".".join(parts)
 
     def _build_context(self, matches: list[dict[str, Any]]) -> str:
         if not matches:
@@ -328,10 +366,15 @@ class GenerationPipeline:
                 f"[{index}] score={match.get('score', 0):.4f}; "
                 f"entity={self._entity_label(payload)}; "
                 f"entity_type={payload.get('entity_type')}; "
+                f"source_kind={payload.get('source_kind')}; "
+                f"source_dialect={payload.get('source_dialect')}; "
+                f"source_name={payload.get('source_name')}; "
                 f"data_type={payload.get('data_type')}; "
                 f"not_null={payload.get('is_not_null')}; "
                 f"table_comment={payload.get('table_comment')}; "
                 f"column_comment={payload.get('column_comment')}; "
+                f"connection_uri={payload.get('connection_uri')}; "
+                f"vault_url={payload.get('vault_url')}; "
                 f"rag_text={payload.get('rag_text') or payload.get('vector_text')}"
             )
         return "\n".join(rows)
@@ -382,7 +425,7 @@ class GenerationPipeline:
         if not raw:
             return {
                 "answer": "",
-                "sql_query": None,
+                "query": None,
                 "used_entities": [],
                 "limitations": "LLM вернула пустой ответ",
             }
@@ -405,21 +448,84 @@ class GenerationPipeline:
 
         return {
             "answer": raw,
-            "sql_query": None,
+            "query": None,
             "used_entities": [],
             "limitations": "Не удалось распарсить JSON-ответ LLM",
         }
 
     @staticmethod
-    def _normalize_result(result: dict[str, Any], fallback_answer: str) -> dict[str, Any]:
+    def _resolve_auto_mode(question: str, previous_matches: list[dict[str, Any]]) -> str:
+        if not previous_matches:
+            return "new_search"
+
+        question_lc = question.lower()
+        discovery_markers = [
+            "найди",
+            "поищи",
+            "покажи таблиц",
+            "какие таблицы",
+            "какие колонки",
+            "какие есть",
+            "новый поиск",
+            "новые данные",
+            "метаданные",
+            "schema",
+            "find",
+            "search",
+        ]
+        followup_markers = [
+            "добавь",
+            "измени",
+            "перепиши",
+            "уточни",
+            "а если",
+            "тогда",
+            "еще",
+            "ещё",
+            "продолж",
+            "объясни",
+            "оптимизируй",
+            "оптимизируй запрос",
+            "дальше",
+        ]
+
+        if any(marker in question_lc for marker in discovery_markers):
+            return "new_search"
+        if any(marker in question_lc for marker in followup_markers):
+            return "continue"
+        if len(question_lc.split()) <= 6:
+            return "continue"
+        return "new_search"
+
+    @classmethod
+    def _resolve_mode(
+        cls,
+        mode: str,
+        question: str,
+        previous_matches: list[dict[str, Any]] | None,
+    ) -> str:
+        if mode != "auto":
+            return mode
+        return cls._resolve_auto_mode(question=question, previous_matches=previous_matches or [])
+
+    @classmethod
+    def _normalize_result(cls, result: dict[str, Any], fallback_answer: str) -> dict[str, Any]:
         answer = result.get("answer") or fallback_answer
-        sql_query = result.get("sql_query")
-        if sql_query in {"", "null", "None"}:
-            sql_query = None
+        query = result.get("query")
+        if query is None:
+            query = result.get("sql_query")
+        if query in {"", "null", "None"}:
+            query = None
 
         used_entities = result.get("used_entities")
         if not isinstance(used_entities, list):
             used_entities = []
+
+        normalized_used_entities: list[str] = []
+        for item in used_entities:
+            label = cls._normalize_entity_label(str(item))
+            if label and label not in normalized_used_entities:
+                normalized_used_entities.append(label)
 
         limitations = result.get("limitations")
         if limitations in {"", "null", "None"}:
@@ -427,10 +533,75 @@ class GenerationPipeline:
 
         return {
             "answer": str(answer).strip(),
-            "sql_query": str(sql_query).strip() if isinstance(sql_query, str) else None,
-            "used_entities": [str(item) for item in used_entities],
+            "query": str(query).strip() if isinstance(query, str) else None,
+            "used_entities": normalized_used_entities,
             "limitations": str(limitations).strip() if isinstance(limitations, str) else limitations,
         }
+
+    @staticmethod
+    def _decode_json_escape(raw: str, escape_pos: int) -> tuple[str | None, int]:
+        current = raw[escape_pos]
+        mapping = {
+            '"': '"',
+            "\\": "\\",
+            "/": "/",
+            "b": "\b",
+            "f": "\f",
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+        }
+        if current in mapping:
+            return mapping[current], escape_pos + 1
+
+        if current == "u":
+            unicode_end = escape_pos + 5
+            if unicode_end > len(raw):
+                return None, escape_pos
+            hex_value = raw[escape_pos + 1:unicode_end]
+            if not re.fullmatch(r"[0-9a-fA-F]{4}", hex_value):
+                return "u", escape_pos + 1
+            return chr(int(hex_value, 16)), unicode_end
+
+        return current, escape_pos + 1
+
+    @classmethod
+    def _extract_answer_prefix(cls, raw_text: str) -> str | None:
+        answer_key_pos = raw_text.find('"answer"')
+        if answer_key_pos < 0:
+            return None
+
+        colon_pos = raw_text.find(":", answer_key_pos + len('"answer"'))
+        if colon_pos < 0:
+            return None
+
+        quote_pos = colon_pos + 1
+        while quote_pos < len(raw_text) and raw_text[quote_pos].isspace():
+            quote_pos += 1
+        if quote_pos >= len(raw_text) or raw_text[quote_pos] != '"':
+            return None
+        quote_pos += 1
+
+        chars: list[str] = []
+        index = quote_pos
+        while index < len(raw_text):
+            symbol = raw_text[index]
+            if symbol == '"':
+                return "".join(chars)
+            if symbol == "\\":
+                index += 1
+                if index >= len(raw_text):
+                    break
+                decoded, next_index = cls._decode_json_escape(raw_text, index)
+                if decoded is None:
+                    break
+                chars.append(decoded)
+                index = next_index
+                continue
+            chars.append(symbol)
+            index += 1
+
+        return "".join(chars)
 
     def ask(
         self,
@@ -442,7 +613,7 @@ class GenerationPipeline:
         top_k: int | None = None,
         score_threshold: float | None = None,
     ) -> dict[str, Any]:
-        matches, search_performed, user_prompt = self._prepare_prompt(
+        matches, search_performed, user_prompt, resolved_mode = self._prepare_prompt(
             question=question,
             mode=mode,
             history=history,
@@ -456,6 +627,7 @@ class GenerationPipeline:
         result = self._normalize_result(raw_result, fallback_answer=llm_text)
         result["matches"] = matches
         result["search_performed"] = search_performed
+        result["resolved_mode"] = resolved_mode
         return result
 
     def _prepare_prompt(
@@ -467,11 +639,12 @@ class GenerationPipeline:
         source: str | None = None,
         top_k: int | None = None,
         score_threshold: float | None = None,
-    ) -> tuple[list[dict[str, Any]], bool, str]:
+    ) -> tuple[list[dict[str, Any]], bool, str, str]:
         matches = previous_matches or []
+        resolved_mode = self._resolve_mode(mode=mode, question=question, previous_matches=matches)
         search_performed = False
 
-        if mode == "new_search" or not matches:
+        if resolved_mode == "new_search" or not matches:
             matches = self.search_client.search(
                 query=question,
                 top_k=top_k,
@@ -483,13 +656,14 @@ class GenerationPipeline:
         context = self._build_context(matches)
         history_text = self._build_history(history)
         user_prompt = (
-            f"Режим: {mode}\n\n"
+            f"Режим пользователя: {mode}\n"
+            f"Режим обработки: {resolved_mode}\n\n"
             f"История диалога:\n{history_text}\n\n"
             f"Вопрос пользователя:\n{question}\n\n"
             f"Контекст метаданных:\n{context}\n\n"
             "Сформируй ответ строго по правилам."
         )
-        return matches, search_performed, user_prompt
+        return matches, search_performed, user_prompt, resolved_mode
 
     def ask_stream(
         self,
@@ -501,7 +675,7 @@ class GenerationPipeline:
         top_k: int | None = None,
         score_threshold: float | None = None,
     ) -> Iterator[dict[str, Any]]:
-        matches, search_performed, user_prompt = self._prepare_prompt(
+        matches, search_performed, user_prompt, resolved_mode = self._prepare_prompt(
             question=question,
             mode=mode,
             history=history,
@@ -510,14 +684,35 @@ class GenerationPipeline:
             top_k=top_k,
             score_threshold=score_threshold,
         )
+
         llm_parts: list[str] = []
+        streamed_answer = ""
         for delta in self.chat_client.generate_stream(SYSTEM_PROMPT, user_prompt):
             llm_parts.append(delta)
-            yield {"type": "delta", "text": delta}
+            partial_text = "".join(llm_parts)
+            answer_prefix = self._extract_answer_prefix(partial_text)
+            if answer_prefix is None or len(answer_prefix) <= len(streamed_answer):
+                continue
+
+            text_delta = answer_prefix[len(streamed_answer):]
+            streamed_answer = answer_prefix
+            if text_delta:
+                yield {"type": "delta", "text": text_delta}
 
         llm_text = "".join(llm_parts).strip()
         raw_result = self._extract_json(llm_text)
         result = self._normalize_result(raw_result, fallback_answer=llm_text)
         result["matches"] = matches
         result["search_performed"] = search_performed
+        result["resolved_mode"] = resolved_mode
+
+        final_answer = str(result.get("answer") or "")
+        if final_answer and final_answer != streamed_answer:
+            if final_answer.startswith(streamed_answer):
+                tail = final_answer[len(streamed_answer):]
+            else:
+                tail = final_answer
+            if tail:
+                yield {"type": "delta", "text": tail}
+
         yield {"type": "final", "result": result}

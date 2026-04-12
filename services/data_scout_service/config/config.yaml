@@ -3,7 +3,7 @@ datasource:
         host: "localhost"
         port: 5432
         username: "navigator_user"
-        password: "navigator_password"
+        password: "vault://secret/bigdata-navigator/data-scout#postgres_password"
         database: "navigator"
 
 kafka:
@@ -27,3 +27,8 @@ kafka:
 metadata_storage:
     table_name: "metadata_catalog"
     outbox_table_name: "metadata_outbox"
+
+vault:
+    url: "http://localhost:8200"
+    token: "root"
+    timeout_seconds: 5

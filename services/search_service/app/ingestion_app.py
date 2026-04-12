@@ -24,6 +24,8 @@ class MetadataIndexer:
             return event_text.strip()
 
         source = event.get("source")
+        source_name = event.get("source_name")
+        source_dialect = event.get("source_dialect")
         database_name = event.get("database_name")
         table_name = event.get("table_name")
         column_name = event.get("column_name")
@@ -32,18 +34,27 @@ class MetadataIndexer:
         table_comment = event.get("table_comment")
         column_comment = event.get("column_comment")
         entity_type = event.get("entity_type")
+        source_label = source_name or source
+        rag_parts = [
+            f"entity={entity_type}",
+            f"path={database_name}.{table_name}",
+        ]
+        if source_label:
+            rag_parts.append(f"source={source_label}")
+        if source_dialect:
+            rag_parts.append(f"dialect={source_dialect}")
+        if table_comment:
+            rag_parts.append(f"table_description={table_comment}")
 
-        if entity_type == "table":
-            return (
-                f"source={source}; database={database_name}; table={table_name}; "
-                f"table_comment={table_comment or ''}"
-            )
+        if entity_type == "column":
+            rag_parts.append(f"path={database_name}.{table_name}.{column_name}")
+            if data_type:
+                rag_parts.append(f"data_type={data_type}")
+            rag_parts.append(f"nullability={'not_null' if is_not_null else 'nullable'}")
+            if column_comment:
+                rag_parts.append(f"column_description={column_comment}")
 
-        return (
-            f"source={source}; database={database_name}; table={table_name}; "
-            f"column={column_name}; type={data_type}; not_null={is_not_null}; "
-            f"table_comment={table_comment or ''}; column_comment={column_comment or ''}"
-        )
+        return " | ".join(part for part in rag_parts if part and "=" in part)
 
     @staticmethod
     def _validate_event(event: dict[str, Any]):
@@ -72,6 +83,12 @@ class MetadataIndexer:
             "occurred_at": event.get("occurred_at"),
             "entity_type": event.get("entity_type"),
             "source": event.get("source"),
+            "source_name": event.get("source_name"),
+            "source_kind": event.get("source_kind"),
+            "source_dialect": event.get("source_dialect"),
+            "connection_uri": event.get("connection_uri"),
+            "vault_url": event.get("vault_url"),
+            "vault_secret_ref": event.get("vault_secret_ref"),
             "database_name": event.get("database_name"),
             "table_name": event.get("table_name"),
             "column_name": event.get("column_name"),

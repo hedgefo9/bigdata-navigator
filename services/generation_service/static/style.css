@@ -354,6 +354,18 @@ textarea {
   font-size: 17px;
 }
 
+.message-content.streaming::after {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 1.15em;
+  margin-left: 3px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background: rgba(14, 165, 163, 0.62);
+  animation: cursor-blink 1s steps(1) infinite;
+}
+
 .typing {
   margin-top: 8px;
   color: var(--muted);
@@ -403,6 +415,58 @@ textarea {
   background: rgba(14, 165, 163, 0.14);
   border-radius: 999px;
   padding: 4px 10px;
+}
+
+.source-chip-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.source-chip-btn.active {
+  border-color: rgba(14, 165, 163, 0.52);
+  background: rgba(14, 165, 163, 0.22);
+}
+
+.entity-details {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(248, 251, 255, 0.88);
+  display: grid;
+  gap: 6px;
+}
+
+.entity-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #0f3a40;
+}
+
+.entity-row {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.entity-row code {
+  background: rgba(16, 32, 54, 0.08);
+  border-radius: 8px;
+  padding: 2px 6px;
+  font-family: "IBM Plex Mono", monospace;
+  color: #173851;
+  word-break: break-all;
+}
+
+.entity-row a {
+  color: #0f766e;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.entity-row a:hover {
+  text-decoration: underline;
 }
 
 .metadata pre {
@@ -543,6 +607,17 @@ textarea {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+@keyframes cursor-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
   }
 }
 

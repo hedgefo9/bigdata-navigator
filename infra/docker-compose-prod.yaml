@@ -79,8 +79,8 @@ services:
       MINIO_ROOT_USER: minio_admin
       MINIO_ROOT_PASSWORD: minio_admin_password
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "19000:9000"
+      - "19001:9001"
     volumes:
       - minio_data:/data
     networks:
@@ -94,6 +94,36 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    networks:
+      - prod_net
+
+  vault:
+    image: hashicorp/vault:1.18
+    restart: unless-stopped
+    command: server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_ADDR: http://0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault_data:/vault/file
+    networks:
+      - prod_net
+
+  vault-init:
+    image: hashicorp/vault:1.18
+    restart: "no"
+    depends_on:
+      - vault
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root
+    volumes:
+      - ./vault/init.sh:/init.sh:ro
+    entrypoint: ["/bin/sh", "/init.sh"]
     networks:
       - prod_net
 
@@ -124,12 +154,14 @@ services:
     image: prom/prometheus:latest
     restart: unless-stopped
     command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--web.enable-lifecycle"
     ports:
-      - "9090:9090"
+      - "19090:9090"
     volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     networks:
       - prod_net
@@ -144,7 +176,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
     ports:
-      - "3000:3000"
+      - "13000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
     networks:
@@ -155,6 +187,7 @@ volumes:
   generation_postgres_data:
   minio_data:
   qdrant_data:
+  vault_data:
   kafka_data:
   prometheus_data:
   grafana_data:

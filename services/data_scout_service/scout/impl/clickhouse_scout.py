@@ -14,12 +14,26 @@ class ClickhouseScout(DataScout):
             host: str = None,
             port: str = None,
             database: str = None,
+            source: str = "clickhouse",
+            source_name: str | None = None,
+            source_kind: str | None = "sql",
+            source_dialect: str | None = "clickhouse",
+            connection_uri: str | None = None,
+            vault_url: str | None = None,
+            vault_secret_ref: str | None = None,
     ):
         self.user = user
         self.password = password
         self.host = host
         self.port = port
         self.database = database
+        self.source = source
+        self.source_name = source_name
+        self.source_kind = source_kind
+        self.source_dialect = source_dialect
+        self.connection_uri = connection_uri
+        self.vault_url = vault_url
+        self.vault_secret_ref = vault_secret_ref
 
         self.client = clickhouse_connect.get_client(
             host=host, port=int(port), database=database, username=user, password=password
@@ -39,7 +53,13 @@ class ClickhouseScout(DataScout):
         query_result = self.client.query(query, parameters={"database": database})
         return [
             TableMetadata(
-                source="clickhouse",
+                source=self.source,
+                source_name=self.source_name,
+                source_kind=self.source_kind,
+                source_dialect=self.source_dialect,
+                connection_uri=self.connection_uri,
+                vault_url=self.vault_url,
+                vault_secret_ref=self.vault_secret_ref,
                 database_name=database,
                 table_name=row["table_name"],
                 table_comment=row["table_comment"],
@@ -68,7 +88,13 @@ class ClickhouseScout(DataScout):
         query_result = self.client.query(query, parameters={"database": database})
         return [
             ColumnMetadata(
-                source="clickhouse",
+                source=self.source,
+                source_name=self.source_name,
+                source_kind=self.source_kind,
+                source_dialect=self.source_dialect,
+                connection_uri=self.connection_uri,
+                vault_url=self.vault_url,
+                vault_secret_ref=self.vault_secret_ref,
                 database_name=database,
                 table_name=row["table_name"],
                 table_comment=row["table_comment"],

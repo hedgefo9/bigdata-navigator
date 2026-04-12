@@ -4,6 +4,12 @@ from dataclasses import dataclass
 @dataclass
 class TableMetadata:
     source: str
+    source_name: str | None
+    source_kind: str | None
+    source_dialect: str | None
+    connection_uri: str | None
+    vault_url: str | None
+    vault_secret_ref: str | None
     database_name: str
     table_name: str
     table_comment: str | None = None
@@ -12,6 +18,12 @@ class TableMetadata:
 @dataclass
 class ColumnMetadata:
     source: str
+    source_name: str | None
+    source_kind: str | None
+    source_dialect: str | None
+    connection_uri: str | None
+    vault_url: str | None
+    vault_secret_ref: str | None
     database_name: str
     table_name: str
     column_name: str
