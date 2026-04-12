@@ -19,6 +19,8 @@ class PostgresScout(DataScout):
         if self.url is None:
             self.url = f"postgresql://{user}:{password}@{host}:{port}/{database}"
         self.engine = sqlalchemy.create_engine(self.url)
+        if self.database is None:
+            self.database = self.engine.url.database
 
     @override
     def find_tables(self) -> list[TableMetadata]:

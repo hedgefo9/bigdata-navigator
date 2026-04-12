@@ -1,0 +1,29 @@
+database:
+  host: "localhost"
+  port: 5434
+  username: "generation_user"
+  password: "generation_password"
+  database: "generation"
+
+auth:
+  jwt_secret: "change-me-in-prod"
+  jwt_algorithm: "HS256"
+  token_ttl_minutes: 1440
+
+search_service:
+  base_url: "http://localhost:8001"
+  timeout_seconds: 30
+
+llm:
+  provider: "openai_compatible"
+  base_url: "http://localhost:1234/v1"
+  api_key: ""
+  model: "openai/gpt-oss-120b"
+  temperature: 0.1
+  max_tokens: 900
+  timeout_seconds: 90
+
+generation_api:
+  host: "0.0.0.0"
+  port: 8010
+  history_window: 12

@@ -1,2 +1,8 @@
+kafka-python
 langchain
 langchain-community
+pyyaml
+qdrant-client
+httpx
+fastapi
+uvicorn

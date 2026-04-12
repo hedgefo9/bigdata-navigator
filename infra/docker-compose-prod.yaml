@@ -20,6 +20,25 @@ services:
     networks:
       - prod_net
 
+  generation-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: generation
+      POSTGRES_USER: generation_user
+      POSTGRES_PASSWORD: generation_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - generation_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U generation_user -d generation"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - prod_net
+
   spark-master:
     image: bitnami/spark:3.5
     restart: unless-stopped
@@ -78,6 +97,29 @@ services:
     networks:
       - prod_net
 
+  kafka:
+    image: bitnami/kafka:latest
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: EXTERNAL://:9092,INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: EXTERNAL://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_NUM_PARTITIONS: 3
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks:
+      - prod_net
+
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -110,8 +152,10 @@ services:
 
 volumes:
   prod_postgres_data:
+  generation_postgres_data:
   minio_data:
   qdrant_data:
+  kafka_data:
   prometheus_data:
   grafana_data:
 

@@ -1,0 +1,44 @@
+kafka:
+  bootstrap_servers:
+    - "localhost:9092"
+  topic: "navigator.metadata"
+  group_id: "search-service"
+  client_id: "search-service-consumer"
+  auto_offset_reset: "earliest"
+  enable_auto_commit: false
+  max_poll_records: 100
+  request_timeout_ms: 12000
+  consumer_timeout_ms: 1000
+
+qdrant:
+  host: "localhost"
+  port: 6333
+  https: false
+  collection_name: "metadata_catalog"
+  distance: "cosine"
+
+embedding:
+  provider: "openai_compatible"
+  base_url: "http://localhost:1234/v1"
+  api_key: ""
+  model: "Qwen/Qwen3-Embedding-8B"
+  timeout_seconds: 30
+
+llm:
+  provider: "openai_compatible"
+  base_url: "http://localhost:1234/v1"
+  api_key: ""
+  model: "openai/gpt-oss-120b"
+  temperature: 0.2
+  max_tokens: 1000
+  timeout_seconds: 90
+
+rag:
+  top_k: 8
+  score_threshold: 0.15
+
+search_api:
+  host: "0.0.0.0"
+  port: 8001
+  default_top_k: 8
+  default_score_threshold: 0.15
